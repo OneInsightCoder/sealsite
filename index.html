@@ -1,6 +1,43 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script language=javascript>
+    var rev = "fwd";
+    function titlebar(val){
+        var msg  = "seal";
+        var res = " ";
+        var speed = 100;
+        var pos = val;
+        msg = "   "+msg+"";
+        var le = msg.length;
+        if(rev == "fwd"){
+            if(pos < le){
+                pos = pos+1;
+                scroll = msg.substr(0,pos);
+                document.title = scroll;
+                timer = window.setTimeout("titlebar("+pos+")",speed);
+            }
+            else {
+                rev = "bwd";
+                timer = window.setTimeout("titlebar("+pos+")",speed);
+            }
+        }
+        else {
+            if(pos > 0) {
+                pos = pos-1;
+                var ale = le-pos;
+                scrol = msg.substr(ale,le);
+                document.title = scrol;
+                timer = window.setTimeout("titlebar("+pos+")",speed);
+            }
+            else {
+                rev = "fwd";
+                timer = window.setTimeout("titlebar("+pos+")",speed);
+            }
+        }
+    }
+    titlebar(0);
+</script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>seal</title>
@@ -9,7 +46,7 @@
         body {
           background: linear-gradient(to bottom, black 50%, white 50%); /* Half black, half white background */
           color: black; /* Default text color */
-          font-family: sans-serif; /* Simple sans-serif font */
+          font-family: monospace; /* Simple monospace font */
           margin: 0;
           min-height: 100vh; /* Ensure the gradient covers the entire viewport */
           display: flex; /* Use flexbox to control vertical alignment */
@@ -85,31 +122,32 @@
     <nav>
         <a href="#home">Home</a>
         <a href="#about">About</a>
-        <a href="#css">Css</a>
+        <a href="#projects">Projects</a>
         <a href="#contact">Contact</a>
     </nav>
 
-    <section id="home">
+    <section id="home" style="margin-top: 50px;">
         <h2>This is just a home page, nothing serious</h2>
         <p>Click "css" on the top to find the css's (duh)</p>
     </section>
 
-    <section id="about">
+    <section id="about" style="margin-top: 50px;">
         <h2>About This Site</h2>
         <p>This is a collection of jrasv's css's, if you have any issues contact us.</p>
     </section>
 
-    <section id="css">
-        <h2>CSS Projects</h2>
-        <p>Here’s where I’ll put the CSS's.</p>
+    <section id="projects" style="margin-top: 50px;">
+        <h2>CSS/Javascript Projects</h2>
+        <p>Here's where I'll put the CSS/Userscripts.</p>
         <p><a href="message.txt">View jrasv cssV2</a></p>
     </section>
 
-    <section id="contact">
+    <section id="contact" style="margin-top: 50px;">
         <h2>How to Reach Us</h2>
-        <p>You can contact us using discord, seal's discord is <strong>sealfr0</strong> mine is <strong>doggo15</strong></p>
+        <p>You can contact us using discord, seal's discord is <strong>sealfr0</strong></p>
         <p><a href="https://discord.com/invite/BHdNsXJxYR">seal's server</a></p>
     </section>
+
 
     <div id="musicControls">
         <span id="playPauseButton">Play</span>
