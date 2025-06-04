@@ -1,4 +1,10 @@
 /* removal.css */
+
+:root{
+  --div-grey: rgb(255 255 255 / 0%);
+  --div-black: rgb(255 255 255 / 0%);
+} 
+
 #newsHolder,
 .compPlWepsL,
 #compTimBox, #tlInfHold,
@@ -11,6 +17,12 @@
 #ammoIcon, #maxHP, #timerIcon, #challIcon{
   display: none !important;
 }
+
+.ranked-matchmaking-status{
+    display: none !important;
+}
+
+#pollfishIndicator{display:none!important}
 
 #streamContainer, #streamContainerNew { 
   display: none !important; 
