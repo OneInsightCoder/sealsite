@@ -1,0 +1,54 @@
+/* removal.css */
+#newsHolder,
+.compPlWepsL,
+#compTimBox, #tlInfHold,
+#seasonLabel, #voiceDisplay, #cmpStatBarH,
+#faceItIconM, .menuItemTitle, 
+#topRightAdHolder, #streamContainer,
+#cmpDatBox, #cmpPartnerImg,
+ #mainLogoFace, #ammoMax,
+#menuWindow::-webkit-scrollbar, #chatList::-webkit-scrollbar,
+#ammoIcon, #maxHP, #timerIcon, #challIcon{
+  display: none !important;
+}
+
+#streamContainer, #streamContainerNew { 
+  display: none !important; 
+}
+
+#menuItemContainer, #compClassPHolder, #compBtnLst{
+  background: transparent;
+}
+
+#bottomLeftChallIcon {
+  display: none;
+}
+
+#bottomLeftPlayer {
+  background-color: transparent;
+}
+#bottomLeftPlayerLeft {
+  background-color: transparent;
+}
+
+#bottomLeftTeamType{
+  display: none
+}
+#bottomLeftTeamName {
+  display: none;
+}
+
+#bottomLeftPlayerRight {
+  background-color: rgb(108 108 108 / 0%);
+}
+
+.greyInner, .greyInlineInner, .greyInlineInnerMid {
+  background-color: rgb(108 108 108 / 0%);
+}
+
+.voiceOff:after {
+  display: none !important;
+}
+#recTimer {
+  display: none !important;
+}
