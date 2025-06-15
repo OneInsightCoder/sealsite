@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bac à sable 3D Cube</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #000; }
+    canvas { display: block; }
+    #instructions {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: sans-serif;
+      background: rgba(0,0,0,0.5);
+      padding: 10px;
+    }
+  </style>
+</head>
+<body>
+<div id="instructions">🖱 Click to spawn cube<br>🎁 Every 10 cubes: Big textured cube<br>👆 Drag any cube with your mouse</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.134.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
+<script>
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  const world = new CANNON.World();
+  world.gravity.set(0, -9.82, 0);
+
+  const raycaster = new THREE.Raycaster();
+  const mouse = new THREE.Vector2();
+
+  const light = new THREE.DirectionalLight(0xffffff, 1);
+  light.position.set(5, 10, 7);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x404040));
+
+  // Add boundaries (walls)
+  const wallMaterial = new CANNON.Material();
+  const wallShape = new CANNON.Box(new CANNON.Vec3(50, 10, 0.5));
+
+  const walls = [
+    { pos: [0, 10, -50], rot: [0, 0, 0] }, // back wall
+    { pos: [0, 10, 50], rot: [0, 0, 0] },  // front wall
+    { pos: [-50, 10, 0], rot: [0, Math.PI / 2, 0] }, // left wall
+    { pos: [50, 10, 0], rot: [0, Math.PI / 2, 0] },  // right wall
+  ];
+
+  walls.forEach(({ pos, rot }) => {
+    const body = new CANNON.Body({ mass: 0, shape: wallShape, material: wallMaterial });
+    body.position.set(...pos);
+    body.quaternion.setFromEuler(...rot);
+    world.addBody(body);
+  });
+
+  const groundMat = new THREE.MeshStandardMaterial({ color: 0x444444 });
+  const groundGeo = new THREE.PlaneGeometry(100, 100);
+  const groundMesh = new THREE.Mesh(groundGeo, groundMat);
+  groundMesh.rotation.x = -Math.PI / 2;
+  scene.add(groundMesh);
+
+  const groundBody = new CANNON.Body({ mass: 0, shape: new CANNON.Plane() });
+  groundBody.quaternion.setFromEuler(-Math.PI / 2, 0, 0);
+  world.addBody(groundBody);
+
+  camera.position.set(0, 5, 10);
+
+  const objects = [];
+  let cubeCount = 0;
+
+  function createCube(pos, isBig = false) {
+    const size = isBig ? 2 : 1;
+    const geometry = new THREE.BoxGeometry(size, size, size);
+    const texture = isBig ? new THREE.TextureLoader().load('https://files.catbox.moe/p27kgl.gif') : null;
+    const material = new THREE.MeshStandardMaterial({
+      color: isBig ? 0xffffff : Math.random() * 0xffffff,
+      map: texture || undefined
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    scene.add(mesh);
+
+    const shape = new CANNON.Box(new CANNON.Vec3(size / 2, size / 2, size / 2));
+    const body = new CANNON.Body({ mass: isBig ? 5 : 1, shape });
+    body.position.copy(pos);
+    world.addBody(body);
+
+    objects.push({ mesh, body });
+  }
+
+  window.addEventListener('click', (event) => {
+    if (dragging) return;
+    const pos = new CANNON.Vec3(
+      (Math.random() - 0.5) * 20,
+      10,
+      (Math.random() - 0.5) * 20
+    );
+    cubeCount++;
+    const isBig = cubeCount % 10 === 0;
+    createCube(pos, isBig);
+  });
+
+  // DRAG LOGIC
+  let jointBody = new CANNON.Body({ mass: 0 });
+  world.addBody(jointBody);
+  let constraint = null;
+  let dragging = false;
+
+  function getIntersects(event) {
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    return raycaster.intersectObjects(objects.map(o => o.mesh));
+  }
+
+  function onMouseDown(event) {
+    const hits = getIntersects(event);
+    if (hits.length === 0) return;
+    const hit = hits[0];
+    const pickedMesh = hit.object;
+    const pickedObj = objects.find(o => o.mesh === pickedMesh);
+    if (!pickedObj) return;
+
+    const hitPoint = new CANNON.Vec3(hit.point.x, hit.point.y, hit.point.z);
+    const pivot = hitPoint.vsub(pickedObj.body.position);
+    pivot.copy(pivot);
+
+    jointBody.position.copy(hit.point);
+    constraint = new CANNON.PointToPointConstraint(
+      pickedObj.body,
+      pivot,
+      jointBody,
+      new CANNON.Vec3(0, 0, 0)
+    );
+    world.addConstraint(constraint);
+    dragging = true;
+  }
+
+  function onMouseMove(event) {
+    if (!dragging || !constraint) return;
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = - (event.clientY / window.innerHeight) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+    const point = new THREE.Vector3();
+    raycaster.ray.intersectPlane(plane, point);
+    // Only move jointBody if it's within reasonable distance
+// Limit drag range to prevent long-distance snapping
+    const distance = jointBody.position.distanceTo(point);
+    if (distance < 10) {
+  jointBody.position.set(point.x, point.y, point.z);
+}
+  }
+
+  function onMouseUp() {
+    if (constraint) {
+      world.removeConstraint(constraint);
+      constraint = null;
+      dragging = false;
+    }
+  }
+
+  window.addEventListener('mousedown', onMouseDown);
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp);
+
+  function animate() {
+    requestAnimationFrame(animate);
+    world.step(1 / 60);
+    objects.forEach(({ mesh, body }) => {
+      mesh.position.copy(body.position);
+      mesh.quaternion.copy(body.quaternion);
+    });
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+    // Pressing space adds a cube
+    window.addEventListener('keydown', (event) => {
+    if (event.code === 'Space' && !dragging) {
+      const pos = new CANNON.Vec3(
+        (Math.random() - 0.5) * 20,
+        10,
+        (Math.random() - 0.5) * 20
+      );
+      cubeCount++;
+      const isBig = cubeCount % 10 === 0;
+      createCube(pos, isBig);
+    }
+  });
+
+</script>
+</body>
+</html>
