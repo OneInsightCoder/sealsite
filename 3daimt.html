@@ -6,6 +6,18 @@
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; }
     #score { position: absolute; top: 10px; left: 10px; color: white; font-size: 20px; z-index: 1; }
+    .health-bar {
+      position: absolute;
+      width: 50px;
+      height: 6px;
+      background: red;
+      border: 1px solid #000;
+      z-index: 1;
+    }
+    .health-bar-inner {
+      height: 100%;
+      background: limegreen;
+    }
     #crosshair {
       position: absolute;
       top: 50%;
@@ -70,9 +82,11 @@
     </div>
   </div>
   <div id="crosshair"></div>
+  <div id="ui-layer"></div>
   <script src="https://unpkg.com/three@0.150.1/build/three.min.js"></script>
 
   <script>
+
     let scene = new THREE.Scene();
     scene.background = new THREE.Color(0x222222);
 
@@ -87,22 +101,37 @@
 
     camera.position.z = 10;
 
+    const uiLayer = document.getElementById('ui-layer');
+
     const boundaryMaterial = new THREE.MeshBasicMaterial({ color: 0x444444, wireframe: true });
     const boundaryGeometry = new THREE.BoxGeometry(40, 20, 20);
     const boundary = new THREE.Mesh(boundaryGeometry, boundaryMaterial);
     scene.add(boundary);
 
     let target;
+    let targetHealthBar;
     let score = 0;
     let targetColor = 0xff0000;
     let targetDestination = new THREE.Vector3();
     let targetMoving = false;
     let moveProgress = 0;
 
+    function createHealthBar() {
+      const bar = document.createElement('div');
+      bar.className = 'health-bar';
+      const inner = document.createElement('div');
+      inner.className = 'health-bar-inner';
+      bar.appendChild(inner);
+      uiLayer.appendChild(bar);
+      return { bar, inner };
+    }
+
     function createTarget(keepPosition = false) {
       const geometry = new THREE.SphereGeometry(0.5, 32, 32);
       const material = new THREE.MeshStandardMaterial({ color: targetColor });
       const newTarget = new THREE.Mesh(geometry, material);
+      newTarget.userData.health = 3;
+      newTarget.userData.radius = 0.5;
 
       if (!keepPosition) {
         targetDestination.set(
@@ -115,34 +144,115 @@
       }
 
       if (target) scene.remove(target);
+      if (targetHealthBar) uiLayer.removeChild(targetHealthBar.bar);
+
       target = newTarget;
       target.position.copy(targetDestination);
       scene.add(target);
+      targetHealthBar = createHealthBar();
+
       targetMoving = true;
       moveProgress = 0;
     }
 
+    function updateHealthBar() {
+      if (!target || !targetHealthBar) return;
+      const vector = new THREE.Vector3();
+      vector.copy(target.position).project(camera);
+      const x = (vector.x + 1) / 2 * window.innerWidth;
+      const y = (-vector.y + 1) / 2 * window.innerHeight;
+
+      targetHealthBar.bar.style.left = `${x - 25}px`;
+      targetHealthBar.bar.style.top = `${y - 40}px`;
+      targetHealthBar.inner.style.width = `${(target.userData.health / 3) * 100}%`;
+    }
+
     createTarget();
 
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    const bullets = [];
 
-    function onClick(event) {
+    function spawnBullet() {
+      const geometry = new THREE.SphereGeometry(0.05, 8, 8);
+      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+      const bullet = new THREE.Mesh(geometry, material);
+      bullet.position.copy(camera.position);
+
+      const direction = new THREE.Vector3();
+      camera.getWorldDirection(direction);
+      bullet.userData.velocity = direction.clone().multiplyScalar(0.5);
+
+      scene.add(bullet);
+      bullets.push(bullet);
+    }
+
+    let shooting = false;
+    let lastShot = 0;
+    document.addEventListener('mousedown', () => {
       if (document.pointerLockElement !== renderer.domElement) {
         renderer.domElement.requestPointerLock();
       } else {
-        raycaster.setFromCamera(mouse, camera);
-        const intersects = raycaster.intersectObjects([target]);
+        shooting = true;
+      }
+    });
 
-        if (intersects.length > 0) {
+    document.addEventListener('mouseup', () => {
+      shooting = false;
+    });
+
+    function shoot() {
+      const now = Date.now();
+      if (shooting && now - lastShot > 50) { // reduced delay from 150ms to 50ms
+        spawnBullet();
+        lastShot = now;
+      }
+    }
+
+
+    function updateBullets() {
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const bullet = bullets[i];
+    bullet.position.add(bullet.userData.velocity);
+
+    // Bullet hits target
+    if (target) {
+      const dx = bullet.position.x - target.position.x;
+      const dy = bullet.position.y - target.position.y;
+      const dz = bullet.position.z - target.position.z;
+      const distanceSq = dx * dx + dy * dy + dz * dz;
+      const hitRadius = target.userData.radius + 0.05;
+
+      if (distanceSq <= hitRadius * hitRadius) {
+        target.userData.health--;
+        scene.remove(bullet);
+        bullets.splice(i, 1);
+
+        if (target.userData.health <= 0) {
           score++;
           document.getElementById('score').innerText = `Score: ${score}`;
           createTarget();
         }
+        continue;
       }
     }
 
-    window.addEventListener('click', onClick);
+    // Kill bullet if it exits boundaries
+    if (
+      Math.abs(bullet.position.x) > 20 ||
+      Math.abs(bullet.position.y) > 10 ||
+      Math.abs(bullet.position.z) > 10
+    ) {
+      scene.remove(bullet);
+      bullets.splice(i, 1);
+      continue;
+    }
+
+    // Safety removal based on total distance
+    if (bullet.position.length() > 100) {
+      scene.remove(bullet);
+      bullets.splice(i, 1);
+    }
+  }
+}
 
     const colorPicker = document.getElementById('colorPicker');
     colorPicker.value = '#ff0000';
@@ -202,6 +312,9 @@
 
     function animate() {
       requestAnimationFrame(animate);
+      shoot();
+      updateBullets();
+      updateHealthBar();
       if (target && targetMoving) {
         moveProgress += 0.05;
         const eased = easeInOutQuad(Math.min(moveProgress, 1));
