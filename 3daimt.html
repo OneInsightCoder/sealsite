@@ -201,7 +201,7 @@
 
     function shoot() {
       const now = Date.now();
-      if (shooting && now - lastShot > 50) { // reduced delay from 150ms to 50ms
+      if (shooting && now - lastShot > 100) { // reduced delay from 150ms to 50ms
         spawnBullet();
         lastShot = now;
       }
