@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>krunker killstreak sounds maker</title>
+</head>
+<body>
+  <h1>krunker killstreak sound maker</h1>
+
+  <p>made by seal</p>
+
+  <h2>streak type</h2>
+  <p>You must choose which type of streak detector the generated userscript will use.</p>
+  <select id="streakTypeSelect" required>
+    <option value="">choose one</option>
+    <option value="killstreak">Killstreak sounds</option>
+    <option value="headshot">Headshot streak sounds</option>
+  </select>
+
+  <h2>sounds</h2>
+  <p>upload or paste links, quotes like ", ', `, “ ” will be removed automaticlly. Uploaded sound files convert to base64; sound links stay as normal URLs. Uploaded sound files convert to base64; sound links stay as normal URLs; image links stay as normal URLs.</p>
+  <input id="soundInput" type="file" accept="audio/*" multiple>
+  <br>
+  <textarea id="soundUrlInput" rows="6" cols="100" placeholder="Paste direct MP3/audio links here, one per line"></textarea>
+  <br>
+  <button id="clearSoundsBtn" type="button">clear sounds</button>
+  <div id="soundList"></div>
+
+  <div id="imagesSection">
+    <h2>images</h2>
+    <p>if left empty, it will replace with a blank image</p>
+    <input id="imageInput" type="file" accept="image/*" multiple>
+    <br>
+    <textarea id="imageUrlInput" rows="6" cols="100" placeholder="Paste direct image links here, one per line"></textarea>
+    <br>
+    <button id="clearImagesBtn" type="button">clear images</button>
+    <div id="imageList"></div>
+  </div>
+
+  <h2>output</h2>
+  <button id="generateBtn" type="button">generate</button>
+  <button id="copyBtn" type="button">copy output</button>
+  <button id="downloadBtn" type="button">download userscript</button>
+  <p id="status"></p>
+  <pre id="debugLog"></pre>
+
+  <textarea id="output" rows="30" cols="120"></textarea>
+
+  <script>
+    const BLANK_IMAGE = "https://files.catbox.moe/0qydbb.png";
+    const MAX_IMAGES = 6;
+    const CONFIG_BLOCK = "const config = {\n  multiIconMode: false,      // true = row of icons, false = single evolving icon\n  iconSize: 128,             // Size of the streak icon in pixels\n  soundVolume: 0.6,          // Volume for kill sounds (0.0 to 1.0)\n  streakResetTime: 15000,    // Time of inactivity to reset streak (in milliseconds)\n  fadeOutDelay: 1000,        // Time before the bottom icon fades after the last kill (in ms)\n  showKillCounter: false,    // Set to false to hide the random \"x2\", \"x3\" text\n  counterFontSize: 32,       // Font size of the random kill counter text\n};";
+    const HEADSHOT_CODE = "let headshotStreak = 0;\n\nfunction playHeadshotSound(index) {\n    const audio = new Audio(headshotSounds[index]);\n    audio.play();\n}\n\nfunction observe() {\n    const chatContainer = document.querySelector(\"#chatList\");\n\n    const mutationWatcher = new MutationObserver((mutations) => {\n        mutations.forEach((mutation) => {\n            if (mutation.type === \"childList\") {\n                mutation.addedNodes.forEach((newNode) => {\n                    if (newNode.nodeType === 1 && newNode.tagName === \"DIV\") {\n                        const messageSpan = newNode.querySelector(\"span.chatMsg\");\n                        if (messageSpan) {\n                            const coloredSpans = messageSpan.querySelectorAll(\"span[style*='color:#']\");\n                            if (coloredSpans.length > 0) {\n                                const firstColoredSpan = coloredSpans[0];\n                                const spanColor = firstColoredSpan.style.color.trim().toLowerCase();\n                                const spanText = firstColoredSpan.textContent.trim();\n\n                                if ((spanColor === \"rgb(255, 255, 255)\" || spanColor === \"#fff\") && spanText === \"You\") {\n                                    const headshotIcon = messageSpan.querySelector(\"img.headShotChatIcon\");\n\n                                    if (headshotIcon) {\n                                        // Headshot d\u00e9tect\u00e9\n                                        if (headshotStreak < headshotSounds.length) {\n                                            playHeadshotSound(headshotStreak);\n                                        } else {\n                                            playHeadshotSound(headshotSounds.length - 1);\n                                        }\n                                        headshotStreak++;\n                                    } \n                                }\n                            }\n                        }\n                    }\n                });\n            }\n        });\n    });\n\n    mutationWatcher.observe(chatContainer, {\n        childList: true\n    });\n}\n\nsetTimeout(() => {\n    observe();\n}, 500);";
+    const BOTTOM_CODE = "let streakCount = 0;\nlet lastKillId = null;\nlet streakTimeout = null;\nlet fadeTimeout = null;\n\nfunction createCounterElement() {\n    if (document.querySelector('#dynamicStreakCounter')) return;\n    const counter = document.createElement('span');\n    counter.id = 'dynamicStreakCounter';\n    Object.assign(counter.style, {\n        position: 'fixed',\n        color: 'white',\n        fontWeight: 'bold',\n        fontSize: `${config.counterFontSize}px`,\n        fontFamily: `'Titillium Web', sans-serif`,\n        textShadow: '0 0 10px rgba(0,0,0,1), 0 0 20px rgba(255,100,100,0.5)',\n        zIndex: '9999999',\n        pointerEvents: 'none',\n        opacity: '0',\n        transform: 'translate(-50%, -50%) scale(0.5)', // Start small\n    });\n    document.body.appendChild(counter);\n    console.log(\"\u2705 Dynamic kill counter injected.\");\n}\n\nfunction createOverlay() {\n  if (document.querySelector('#killStreakOverlay')) return;\n  const overlay = document.createElement('div');\n  overlay.id = 'killStreakOverlay';\n  Object.assign(overlay.style, {\n    position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',\n    pointerEvents: 'none', zIndex: '999999',\n  });\n\n  if (!config.multiIconMode) {\n    const container = document.createElement('div');\n    container.id = 'streakContainer';\n    Object.assign(container.style, {\n        opacity: '0.0',\n        transition: 'opacity 0.4s ease, transform 0.4s cubic-bezier(0.68, -0.55, 0.27, 1.55)',\n        transform: 'translateY(50px) scale(0.8)',\n    });\n    const img = document.createElement('img');\n    img.id = 'streakSingleIcon';\n    img.src = streakIcons[0];\n    img.style.width = `${config.iconSize}px`;\n    img.style.height = `${config.iconSize}px`;\n    container.appendChild(img);\n    overlay.appendChild(container);\n  }\n  document.body.appendChild(overlay);\n  console.log(\"\u2705 Kill streak overlay injected.\");\n}\n\nfunction animateCounter(count) {\n    // MODIFIED: Changed \"count < 2\" to \"count < 1\" to allow the first kill to show.\n    if (!config.showKillCounter || count < 1) return;\n    const counter = document.querySelector('#dynamicStreakCounter');\n    if (!counter) return;\n\n    // 1. Set position to top center\n    counter.style.left = '50%';\n    counter.style.top = '80px';\n\n    counter.textContent = `x${count}`;\n\n    // 2. Animate In (Pop)\n    counter.style.transition = 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.3s ease';\n    counter.style.opacity = '1';\n    counter.style.transform = 'translate(-50%, -50%) scale(1.1)';\n\n    // 3. Animate Out (Drift Up and Fade)\n    setTimeout(() => {\n        counter.style.transition = 'transform 1.5s ease-out, opacity 1.5s ease-out';\n        counter.style.opacity = '0';\n        counter.style.transform = `translate(-50%, -150%) scale(0.9)`;\n    }, 250);\n}\n\n\nfunction animateKillKick(element) {\n    if (!element) return;\n    element.style.transform = 'translateY(0) scale(1.05)';\n    setTimeout(() => { element.style.transform = 'translateY(0) scale(1.0)'; }, 150);\n}\n\nfunction updateOverlay() {\n  if (config.multiIconMode) return;\n  const container = document.querySelector('#streakContainer');\n  const img = document.querySelector('#streakSingleIcon');\n  if (!container || !img) return;\n\n  if (streakCount > 0) {\n    if (container.style.opacity === '0') {\n         Object.assign(container.style, { transform: 'translateY(0) scale(1.0)', opacity: '1.0' });\n    } else {\n         animateKillKick(container);\n    }\n    img.src = streakIcons[Math.min(streakCount - 1, streakIcons.length - 1)];\n\n    clearTimeout(fadeTimeout);\n    fadeTimeout = setTimeout(() => {\n      Object.assign(container.style, { opacity: '0.0', transform: 'translateY(50px) scale(0.8)' });\n    }, config.fadeOutDelay);\n  } else {\n    Object.assign(container.style, { opacity: '0.0', transform: 'translateY(50px) scale(0.8)' });\n  }\n}\n\nfunction playStreakSound(index) {\n  if (index < 0 || index >= killStreakSounds.length) return;\n  const audio = new Audio(killStreakSounds[index]);\n  audio.volume = config.soundVolume;\n  audio.play().catch(() => {});\n}\n\nfunction resetStreak(reason = '') {\n  if (streakCount > 0) console.log(`\ud83d\udd01 Streak reset${reason ? ` due to ${reason}` : ''}`);\n  streakCount = 0;\n  updateOverlay();\n  clearTimeout(streakTimeout);\n  clearTimeout(fadeTimeout);\n}\n\nfunction initObserver() {\n  const chatList = document.querySelector('#chatList');\n  if (!chatList) {\n    setTimeout(initObserver, 1000);\n    return;\n  }\n\n  const observer = new MutationObserver(mutations => {\n    for (const mutation of mutations) {\n      for (const node of mutation.addedNodes) {\n        if (!(node instanceof HTMLElement)) continue;\n        const chatMsg = node.querySelector('.chatMsg');\n        if (!chatMsg || node.id === lastKillId) continue;\n\n        const spans = chatMsg.querySelectorAll('span');\n        if (spans.length < 2) continue;\n\n        const isYouKilling = spans[0].textContent.trim() === 'You' && spans[0].style.color === 'rgb(255, 255, 255)';\n        const isYouKilled = spans[spans.length - 1].textContent.trim() === 'You' && spans[spans.length - 1].style.color === 'rgb(255, 255, 255)';\n\n        if (isYouKilling) {\n          lastKillId = node.id;\n          streakCount++;\n          console.log(`\u2705 Kill #${streakCount}`);\n\n          playStreakSound(Math.min(streakCount - 1, killStreakSounds.length - 1));\n          updateOverlay();\n          animateCounter(streakCount);\n\n          clearTimeout(streakTimeout);\n          streakTimeout = setTimeout(() => resetStreak('inactivity'), config.streakResetTime);\n        } else if (isYouKilled) {\n          resetStreak('death');\n        }\n      }\n    }\n  });\n\n  observer.observe(chatList, { childList: true });\n  console.log('\u2705 Kill streak tracker running.');\n}\n\nwindow.addEventListener('load', () => {\n  setTimeout(() => {\n      createOverlay();\n      if (config.showKillCounter) {\n          createCounterElement();\n      }\n      initObserver();\n  }, 2000);\n});";
+
+    const streakTypeSelect = document.getElementById("streakTypeSelect");
+    const soundInput = document.getElementById("soundInput");
+    const soundUrlInput = document.getElementById("soundUrlInput");
+    const imageInput = document.getElementById("imageInput");
+    const imageUrlInput = document.getElementById("imageUrlInput");
+    const soundList = document.getElementById("soundList");
+    const imageList = document.getElementById("imageList");
+    const output = document.getElementById("output");
+    const statusEl = document.getElementById("status");
+    const debugLog = document.getElementById("debugLog");
+    const imagesSection = document.getElementById("imagesSection");
+
+    function logDebug(message) {
+      if (!debugLog) return;
+      debugLog.textContent += message + "\n";
+    }
+
+    let soundFiles = [];
+    let imageFiles = [];
+
+    function readFileAsDataURL(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function guessAudioMime(url, fallbackType) {
+      if (fallbackType && fallbackType !== "application/octet-stream") return fallbackType;
+
+      const clean = url.toLowerCase().split("?")[0].split("#")[0];
+
+      if (clean.endsWith(".mp3")) return "audio/mpeg";
+      if (clean.endsWith(".wav")) return "audio/wav";
+      if (clean.endsWith(".ogg")) return "audio/ogg";
+      if (clean.endsWith(".m4a")) return "audio/mp4";
+      if (clean.endsWith(".aac")) return "audio/aac";
+      if (clean.endsWith(".flac")) return "audio/flac";
+
+      return "audio/mpeg";
+    }
+
+    function guessImageMime(url, fallbackType) {
+      if (fallbackType && fallbackType !== "application/octet-stream") return fallbackType;
+
+      const clean = url.toLowerCase().split("?")[0].split("#")[0];
+
+      if (clean.endsWith(".png")) return "image/png";
+      if (clean.endsWith(".jpg") || clean.endsWith(".jpeg")) return "image/jpeg";
+      if (clean.endsWith(".webp")) return "image/webp";
+      if (clean.endsWith(".gif")) return "image/gif";
+      if (clean.endsWith(".svg")) return "image/svg+xml";
+
+      return "image/png";
+    }
+
+    function arrayBufferToBase64(buffer) {
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      let binary = "";
+
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        const chunk = bytes.subarray(i, i + chunkSize);
+        binary += String.fromCharCode.apply(null, chunk);
+      }
+
+      return btoa(binary);
+    }
+
+    async function fetchArrayBufferFromCandidates(originalUrl) {
+      const candidates = [
+        {
+          label: "direct",
+          url: originalUrl,
+          options: { method: "GET", mode: "cors", cache: "no-store" }
+        },
+        {
+          label: "allorigins",
+          url: "https://api.allorigins.win/raw?url=" + encodeURIComponent(originalUrl),
+          options: { method: "GET", mode: "cors", cache: "no-store" }
+        },
+        {
+          label: "corsproxy.io",
+          url: "https://corsproxy.io/?" + encodeURIComponent(originalUrl),
+          options: { method: "GET", mode: "cors", cache: "no-store" }
+        },
+        {
+          label: "thingproxy",
+          url: "https://thingproxy.freeboard.io/fetch/" + originalUrl,
+          options: { method: "GET", mode: "cors", cache: "no-store" }
+        }
+      ];
+
+      const errors = [];
+
+      for (const candidate of candidates) {
+        try {
+          statusEl.textContent = "Trying " + candidate.label + " for: " + originalUrl;
+
+          const response = await fetch(candidate.url, candidate.options);
+          if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+          }
+
+          const contentType = response.headers.get("content-type") || "";
+          const buffer = await response.arrayBuffer();
+
+          if (!buffer || buffer.byteLength === 0) {
+            throw new Error("empty file");
+          }
+
+          // If a proxy returns an HTML error page, don't convert that into an audio file.
+          if (contentType.includes("text/html") && buffer.byteLength < 200000) {
+            throw new Error("proxy returned HTML instead of audio");
+          }
+
+          return {
+            buffer,
+            contentType,
+            source: candidate.label
+          };
+        } catch (error) {
+          console.warn("Failed candidate:", candidate.label, error);
+          errors.push(candidate.label + ": " + error.message);
+        }
+      }
+
+      throw new Error(errors.join(" | "));
+    }
+
+    async function readUrlAsDataURL(url) {
+      if (url.startsWith("data:")) return url;
+
+      const result = await fetchArrayBufferFromCandidates(url);
+      const mime = guessAudioMime(url, result.contentType);
+      const base64 = arrayBufferToBase64(result.buffer);
+
+      return "data:" + mime + ";base64," + base64;
+    }
+
+    async function readImageUrlAsDataURL(url) {
+      if (url.startsWith("data:")) return url;
+
+      const result = await fetchArrayBufferFromCandidates(url);
+      const mime = guessImageMime(url, result.contentType);
+      const base64 = arrayBufferToBase64(result.buffer);
+
+      return "data:" + mime + ";base64," + base64;
+    }
+
+    function cleanUrlInput(line) {
+      return line
+        .trim()
+        // remove normal quotes, curly quotes, and backticks anywhere in the pasted link
+        .replace(/["'`“”‘’]/g, "")
+        // remove common trailing separators if someone pasted from an array
+        .replace(/[;,]+$/g, "")
+        .trim();
+    }
+
+    function getSoundUrls() {
+      return soundUrlInput.value.split(/\r?\n/).map(cleanUrlInput).filter(Boolean);
+    }
+
+    function getImageUrls() {
+      return imageUrlInput.value.split(/\r?\n/).map(cleanUrlInput).filter(Boolean).slice(0, MAX_IMAGES);
+    }
+
+    function escapeForJSString(value) {
+      return JSON.stringify(String(value));
+    }
+
+    function renderFileLists() {
+      soundList.innerHTML = "";
+      imageList.innerHTML = "";
+
+      const soundUl = document.createElement("ul");
+
+      soundFiles.forEach((file, index) => {
+        const li = document.createElement("li");
+        li.textContent = (index + 1) + ". uploaded file: " + file.name + " (" + file.type + ")";
+        soundUl.appendChild(li);
+      });
+
+      getSoundUrls().forEach((url, index) => {
+        const li = document.createElement("li");
+        li.textContent = (soundFiles.length + index + 1) + ". link: " + url;
+        soundUl.appendChild(li);
+      });
+
+      soundList.appendChild(soundUl);
+
+      // Hide image list if headshot type is selected
+      if (streakTypeSelect.value === "headshot") {
+        imageList.innerHTML = "";
+        return;
+      }
+
+      const imageUl = document.createElement("ul");
+      imageFiles.forEach((file, index) => {
+        const li = document.createElement("li");
+        li.textContent = (index + 1) + ". uploaded file: " + file.name + " (" + file.type + ")";
+        imageUl.appendChild(li);
+      });
+
+      const imageUrls = getImageUrls();
+      imageUrls.forEach((url, index) => {
+        const li = document.createElement("li");
+        li.textContent = (imageFiles.length + index + 1) + ". link: " + url;
+        imageUl.appendChild(li);
+      });
+
+      const usedImageSlots = Math.min(MAX_IMAGES, imageFiles.length + imageUrls.length);
+      for (let i = usedImageSlots; i < MAX_IMAGES; i++) {
+        const li = document.createElement("li");
+        li.textContent = (i + 1) + ". blank image will be used";
+        imageUl.appendChild(li);
+      }
+
+      imageList.appendChild(imageUl);
+    }
+
+    // Set up imagesSection to hide/show depending on streak type
+    function toggleImagesSection() {
+      if (!imagesSection) return;
+      if (streakTypeSelect.value === "headshot") {
+        imagesSection.style.display = "none";
+      } else {
+        imagesSection.style.display = "";
+      }
+      renderFileLists();
+    }
+
+    streakTypeSelect.addEventListener("change", () => {
+      toggleImagesSection();
+      generateOutput();
+    });
+
+    soundInput.addEventListener("change", () => {
+      soundFiles = Array.from(soundInput.files || []);
+      renderFileLists();
+    });
+
+    soundUrlInput.addEventListener("input", () => {
+      const cleaned = soundUrlInput.value
+        .split(/\r?\n/)
+        .map((line) => {
+          const clean = cleanUrlInput(line);
+          return clean || line;
+        })
+        .join("\n");
+
+      if (cleaned !== soundUrlInput.value) soundUrlInput.value = cleaned;
+      renderFileLists();
+    });
+
+    imageInput.addEventListener("change", () => {
+      const files = Array.from(imageInput.files || []);
+      if (files.length > MAX_IMAGES) alert("Only the first 6 images will be used.");
+      imageFiles = files.slice(0, MAX_IMAGES);
+      renderFileLists();
+    });
+
+    imageUrlInput.addEventListener("input", () => {
+      const cleaned = imageUrlInput.value
+        .split(/\r?\n/)
+        .map((line) => {
+          const clean = cleanUrlInput(line);
+          return clean || line;
+        })
+        .join("\n");
+
+      if (cleaned !== imageUrlInput.value) imageUrlInput.value = cleaned;
+      renderFileLists();
+    });
+
+    document.getElementById("clearSoundsBtn").addEventListener("click", () => {
+      soundFiles = [];
+      soundInput.value = "";
+      soundUrlInput.value = "";
+      renderFileLists();
+      generateOutput();
+    });
+
+    document.getElementById("clearImagesBtn").addEventListener("click", () => {
+      imageFiles = [];
+      imageInput.value = "";
+      imageUrlInput.value = "";
+      renderFileLists();
+      generateOutput();
+    });
+
+    async function generateOutput() {
+      const streakType = streakTypeSelect.value;
+
+      if (!streakType) {
+        output.value = "";
+        statusEl.textContent = "Choose Killstreak sounds or Headshot streak sounds first.";
+        if (debugLog) debugLog.textContent = "";
+        return;
+      }
+
+      statusEl.textContent = "Generating...";
+      if (debugLog) debugLog.textContent = "";
+
+      try {
+        const soundDataUrls = [];
+        for (const file of soundFiles) soundDataUrls.push(await readFileAsDataURL(file));
+
+        const soundUrls = getSoundUrls();
+        for (let i = 0; i < soundUrls.length; i++) {
+          const url = soundUrls[i];
+          soundDataUrls.push(url);
+          logDebug("Added sound link without base64: " + url);
+        }
+
+        let imageUrls = [];
+
+        // If headshot mode: do not include images
+        if (streakType === "killstreak") {
+          for (const file of imageFiles.slice(0, MAX_IMAGES)) {
+            imageUrls.push(await readFileAsDataURL(file));
+          }
+
+          const imageLinks = getImageUrls();
+          for (let i = 0; i < imageLinks.length && imageUrls.length < MAX_IMAGES; i++) {
+            const url = imageLinks[i];
+            imageUrls.push(url);
+            logDebug("Added image link: " + url);
+          }
+
+          while (imageUrls.length < MAX_IMAGES) imageUrls.push(BLANK_IMAGE);
+        } else {
+          // headshot: use blank images but do not output an icons array
+          imageUrls = [];
+        }
+
+        const soundText = soundDataUrls.map((url) => "  " + escapeForJSString(url)).join(",\n");
+        const imageText = imageUrls.map((url) => "  " + escapeForJSString(url)).join(",\n");
+
+        let resultParts;
+
+        if (streakType === "killstreak") {
+          resultParts = [
+            "// ==UserScript==",
+            "// @name         custom killstreak sounds",
+            "// @description  made with seal's killstreak sound generator",
+            "// @author       You",
+            "// @match        *://krunker.io/*",
+            "// @run-at       document-end",
+            "// ==/UserScript==",
+            "",
+            "(function () {",
+            "  'use strict';",
+            "",
+            CONFIG_BLOCK,
+            "",
+            "const killStreakSounds = [",
+            soundText,
+            "];",
+            "",
+            "const streakIcons = [",
+            imageText,
+            "];",
+            "",
+            BOTTOM_CODE,
+            "})();"
+          ];
+        } else if (streakType === "headshot") {
+          resultParts = [
+            "// ==UserScript==",
+            "// @name         custom headshot streak sounds",
+            "// @description  made with seal's killstreak sound generator",
+            "// @author       You",
+            "// @match        *://krunker.io/*",
+            "// @run-at       document-end",
+            "// ==/UserScript==",
+            "",
+            "(function () {",
+            "  'use strict';",
+            "",
+            "const headshotSounds = [",
+            soundText,
+            "];",
+            "",
+            HEADSHOT_CODE,
+            "})();"
+          ];
+        }
+
+        const result = resultParts.join("\n");
+
+        output.value = result;
+
+        // Fix display for image slots:
+        if (streakType === "headshot") {
+          statusEl.textContent =
+            "Generated Headshot streak sounds with " + soundDataUrls.length + " sound(s).";
+        } else {
+          statusEl.textContent =
+            "Generated Killstreak sounds with " + soundDataUrls.length + " sound(s) and " + imageUrls.length + " image slot(s).";
+        }
+      } catch (error) {
+        console.error(error);
+        statusEl.textContent = "Failed to generate output.";
+        alert("Failed to read one of the files.");
+      }
+    }
+
+    document.getElementById("generateBtn").addEventListener("click", generateOutput);
+
+    document.getElementById("copyBtn").addEventListener("click", async () => {
+      if (!output.value.trim()) await generateOutput();
+
+      try {
+        await navigator.clipboard.writeText(output.value);
+        statusEl.textContent = "Copied output.";
+      } catch (error) {
+        output.select();
+        document.execCommand("copy");
+        statusEl.textContent = "Copied output.";
+      }
+    });
+
+    document.getElementById("downloadBtn").addEventListener("click", async () => {s
+      if (!output.value.trim()) await generateOutput();
+
+      const blob = new Blob([output.value], { type: "text/javascript" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (streakTypeSelect.value === "headshot" ? "custom-headshot-streak-sounds.user.js" : "custom-killstreak-sounds.user.js");
+      a.click();
+      URL.revokeObjectURL(url);
+    });
+
+    // Initial set up for hiding the images section if necessary
+    toggleImagesSection();
+    renderFileLists();
+    generateOutput();
+  </script>
+  <p>uploaded sound files are embedded as base64. Sound links and image links stay as normal URLs.</p>
+  <footer>no css cause im lazy</footer>
+</body>
+</html>
