@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="create crosshairs and custom killstreak sound scripts for krunker.">
+  <title>krunker creators</title>
+  <style>
+/* Layout only. All typography, colors, borders and controls use browser defaults. */
+body { max-width: 1100px; margin: 0 auto; padding: 16px; }
+#tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 16px; }
+.workspace { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 24px; align-items: start; }
+.fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 140px); gap: 12px 16px; align-items: center; }
+fieldset { margin: 0 0 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+canvas { display: block; max-width: 100%; height: auto; }
+input[type="number"], select { box-sizing: border-box; width: 100%; }
+.preview-controls { max-width: 320px; margin: 16px 0; }
+[hidden] { display: none !important; }
+.wide-input { box-sizing: border-box; width: 100%; }
+.asset-list { padding-left: 24px; }
+.asset-list li { margin: 12px 0; }
+.asset-list audio { display: block; width: 100%; max-width: 320px; margin-top: 8px; }
+.asset-list img { display: block; max-width: 96px; max-height: 96px; margin-top: 8px; }
+
+</style>
+  <script type="module">
+const defaults = Object.freeze({
+  shape: 'cross', color: '#00ff00', length: 12, thickness: 2, gap: 4,
+  radius: 12, outline: 1, outlineColor: '#000000', opacity: 100,
+  dot: false, dotSize: 3, topArm: true, rotation: 0
+});
+const ranges = {
+  length: [1, 32], thickness: [1, 12], gap: [0, 16], radius: [2, 32],
+  outline: [0, 4], opacity: [5, 100], dotSize: [1, 12], rotation: [0, 90]
+};
+
+function validate(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('choose a crosshair design json file.');
+  const result = {};
+  for (const [key, fallback] of Object.entries(defaults)) {
+    const value = input[key] ?? fallback;
+    if (ranges[key]) {
+      const [min, max] = ranges[key];
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) throw new Error(`${key} must be a whole number from ${min} to ${max}.`);
+    } else if (typeof fallback === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error(`${key} must be true or false.`);
+    } else if (key === 'shape') {
+      if (!['cross', 'x', 'circle', 'square', 'dot'].includes(value)) throw new Error('unknown crosshair shape.');
+    } else if (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value)) throw new Error('colors must be six-digit hex colors.');
+    result[key] = value;
+  }
+  return result;
+}
+
+function drawCrosshair(ctx, s, x, y, scale = 1) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.rotate((s.rotation + (s.shape === 'x' ? 45 : 0)) * Math.PI / 180);
+  // Composite once so outlines do not darken partially transparent centers.
+  const layer = document.createElement('canvas');
+  layer.width = layer.height = 128;
+  const pen = layer.getContext('2d');
+  pen.translate(64, 64);
+  const rect = (x, y, w, h) => {
+    if (s.outline) { pen.fillStyle = s.outlineColor; pen.fillRect(x - s.outline, y - s.outline, w + 2*s.outline, h + 2*s.outline); }
+    pen.fillStyle = s.color; pen.fillRect(x, y, w, h);
+  };
+  if (s.shape === 'cross' || s.shape === 'x') {
+    const t = s.thickness, g = s.gap, l = s.length;
+    rect(g, -t/2, l, t); rect(-g-l, -t/2, l, t);
+    rect(-t/2, g, t, l);
+    if (s.topArm) rect(-t/2, -g-l, t, l);
+  } else if (s.shape === 'circle' || s.shape === 'square') {
+    const ring = () => {
+      pen.beginPath();
+      if (s.shape === 'circle') pen.arc(0, 0, s.radius, 0, Math.PI*2);
+      else pen.rect(-s.radius, -s.radius, s.radius*2, s.radius*2);
+    };
+    if (s.outline) { ring(); pen.lineWidth = s.thickness + 2*s.outline; pen.strokeStyle = s.outlineColor; pen.stroke(); }
+    ring(); pen.lineWidth = s.thickness; pen.strokeStyle = s.color; pen.stroke();
+  }
+  if (s.dot || s.shape === 'dot') {
+    pen.beginPath(); pen.arc(0, 0, s.dotSize/2, 0, Math.PI*2);
+    if (s.outline) { pen.lineWidth = s.outline*2; pen.strokeStyle = s.outlineColor; pen.stroke(); }
+    pen.fillStyle = s.color; pen.fill();
+  }
+  ctx.globalAlpha = s.opacity/100;
+  ctx.drawImage(layer, -64, -64);
+  ctx.restore();
+}
+
+function createExport(s) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  drawCrosshair(canvas.getContext('2d'), s, 64, 64);
+  return canvas;
+}
+
+const storageKey = 'krunker-crosshair-design-v1';
+const presets = {
+  classic: { ...defaults },
+  dot: { ...defaults, shape: 'dot', color: '#ff0000', dotSize: 4 },
+  circle: { ...defaults, shape: 'circle', color: '#00ffff', radius: 8, dot: true, dotSize: 2 },
+  t: { ...defaults, color: '#ffffff', topArm: false, length: 8, gap: 3 }
+};
+
+function mountCrosshair(panel) {
+  panel.innerHTML = `
+    <h2>crosshair editor</h2>
+    <div class="workspace">
+      <form id="editor">
+        <fieldset><legend>starting point</legend>
+          <label for="preset">preset</label>
+          <select id="preset"><option value="" selected>choose a preset…</option><option value="classic">classic cross</option><option value="dot">red dot</option><option value="circle">circle + dot</option><option value="t">t crosshair</option></select>
+        </fieldset>
+        <fieldset><legend>shape</legend><div class="fields">
+          <label for="shape">shape</label><select id="shape" name="shape"><option value="cross">cross</option><option value="x">x</option><option value="circle">circle</option><option value="square">square</option><option value="dot">dot</option></select>
+          <label for="length">arm length (px)</label><input id="length" name="length" type="number" required min="1" max="32" step="1">
+          <label for="thickness">thickness (px)</label><input id="thickness" name="thickness" type="number" required min="1" max="12" step="1">
+          <label for="gap">center gap (px, each side)</label><input id="gap" name="gap" type="number" required min="0" max="16" step="1">
+          <label for="radius">circle / square radius (px)</label><input id="radius" name="radius" type="number" required min="2" max="32" step="1">
+          <label for="rotation">rotation (degrees)</label><input id="rotation" name="rotation" type="number" required min="0" max="90" step="1">
+          <label for="topArm">show top arm</label><input id="topArm" name="topArm" type="checkbox">
+        </div></fieldset>
+        <fieldset><legend>color &amp; outline</legend><div class="fields">
+          <label for="color">crosshair color</label><input id="color" name="color" type="color">
+          <label for="opacity">opacity (%)</label><input id="opacity" name="opacity" type="number" required min="5" max="100" step="1">
+          <label for="outline">outline width (px)</label><input id="outline" name="outline" type="number" required min="0" max="4" step="1">
+          <label for="outlineColor">outline color</label><input id="outlineColor" name="outlineColor" type="color">
+        </div></fieldset>
+        <fieldset><legend>center dot</legend><div class="fields">
+          <label for="dot">show center dot</label><input id="dot" name="dot" type="checkbox">
+          <label for="dotSize">dot diameter (px)</label><input id="dotSize" name="dotSize" type="number" required min="1" max="12" step="1">
+        </div></fieldset>
+        <button type="button" id="reset">reset design</button>
+      </form>
+      <div>
+        <h3>live preview</h3>
+        <canvas id="preview" width="320" height="320" role="img" aria-label="live crosshair preview"></canvas>
+        <div class="fields preview-controls">
+          <label for="background">preview background</label><select id="background"><option value="checker">transparency grid</option><option value="dark">dark</option><option value="light">light</option><option value="sand">sand</option><option value="sky">sky</option></select>
+          <label for="zoom">preview zoom</label><select id="zoom"><option value="1">1× (actual pixels)</option><option value="2" selected>2×</option></select>
+        </div>
+        <p>export: 128 × 128 px, transparent background. preview background and zoom are not exported.</p>
+        <div class="actions"><button type="button" id="download">download png</button><button type="button" id="export-design">export design json</button></div>
+        <p><label for="import-design">import design json</label><br><button type="button" id="import-design-button">choose design json file</button><input id="import-design" type="file" accept=".json,application/json" hidden></p>
+        <p id="status" role="status" aria-live="polite"></p>
+        <details><summary>use your crosshair in krunker</summary>
+          <ol><li>download your transparent png.</li><li>upload the png to an image host that provides a public, direct image url.</li><li>in krunker’s crosshair settings, choose the image crosshair and paste that direct image url.</li></ol>
+          <p>this editor exports the image; it does not upload it or change your game settings. design json files are for this editor, not krunker settings imports.</p>
+          <p><a href="https://krunkerio.fandom.com/wiki/Settings" target="_blank" rel="noopener noreferrer">krunker settings reference</a></p>
+        </details>
+      </div>
+    </div>`;
+  const find = selector => panel.querySelector(selector);
+  const form = find('#editor');
+  const status = find('#status');
+  let state = { ...defaults };
+  let storageAvailable = true;
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved) state = validate(JSON.parse(saved));
+  } catch { status.textContent = 'could not restore the last design. starting with the default.'; }
+
+  function persist() {
+    try { localStorage.setItem(storageKey, JSON.stringify(state)); }
+    catch { storageAvailable = false; }
+  }
+  function render() {
+    const canvas = find('#preview');
+    const ctx = canvas.getContext('2d');
+    const background = find('#background').value;
+    if (background === 'checker') {
+      for (let y = 0; y < 320; y += 16) for (let x = 0; x < 320; x += 16) {
+        ctx.fillStyle = (x/16 + y/16)%2 ? '#eeeeee' : '#cccccc'; ctx.fillRect(x, y, 16, 16);
+      }
+    } else {
+      ctx.fillStyle = { dark: '#303030', light: '#ffffff', sand: '#b5a487', sky: '#9ac5e3' }[background];
+      ctx.fillRect(0, 0, 320, 320);
+    }
+    const zoom = Number(find('#zoom').value);
+    ctx.imageSmoothingEnabled = false;
+    drawCrosshair(ctx, state, 160, 160, zoom);
+    canvas.setAttribute('aria-label', `${state.shape} crosshair in ${state.color}, shown at ${zoom} times size`);
+  }
+  function updateControls() {
+    for (const [key, value] of Object.entries(state)) {
+      const input = form.elements.namedItem(key);
+      if (input.type === 'checkbox') input.checked = value; else input.value = value;
+    }
+    const arms = ['cross', 'x'].includes(state.shape);
+    for (const key of ['length', 'gap', 'topArm']) form.elements.namedItem(key).disabled = !arms;
+    form.elements.namedItem('thickness').disabled = state.shape === 'dot';
+    form.elements.namedItem('radius').disabled = !['circle', 'square'].includes(state.shape);
+    form.elements.namedItem('dot').disabled = state.shape === 'dot';
+    form.elements.namedItem('dotSize').disabled = !state.dot && state.shape !== 'dot';
+    form.elements.namedItem('outlineColor').disabled = !state.outline;
+  }
+  function replaceState(next, message) {
+    state = validate(next); persist(); updateControls(); render();
+    status.textContent = message + (storageAvailable ? '' : ' browser storage is unavailable; export json to keep your design.');
+  }
+  form.addEventListener('submit', event => event.preventDefault());
+  form.addEventListener('input', event => {
+    const input = event.target;
+    if (!Object.hasOwn(defaults, input.name)) return;
+    if (!input.checkValidity()) { status.textContent = input.validationMessage.toLowerCase(); return; }
+    const value = input.type === 'checkbox' ? input.checked : input.type === 'number' ? Number(input.value) : input.value;
+    try {
+      state = validate({ ...state, [input.name]: value });
+      persist(); updateControls(); render(); find('#preset').value = '';
+      status.textContent = storageAvailable ? 'design saved in this browser.' : 'browser storage is unavailable; export json to keep your design.';
+    } catch (error) { status.textContent = error.message.toLowerCase(); }
+  });
+  find('#preset').addEventListener('change', event => {
+    if (presets[event.target.value]) replaceState(presets[event.target.value], 'preset loaded.');
+  });
+  find('#reset').addEventListener('click', () => { find('#preset').value = ''; replaceState(defaults, 'design reset.'); });
+  find('#background').addEventListener('change', render);
+  find('#zoom').addEventListener('change', render);
+  function download(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href = url; link.download = name;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  find('#download').addEventListener('click', () => {
+    if (!form.reportValidity()) return;
+    createExport(state).toBlob(blob => {
+      if (!blob) { status.textContent = 'png export failed. please try again.'; return; }
+      download(blob, 'krunker-crosshair.png'); status.textContent = 'transparent png download started.';
+    }, 'image/png');
+  });
+  find('#export-design').addEventListener('click', () => {
+    if (!form.reportValidity()) return;
+    download(new Blob([JSON.stringify({ version: 1, ...state }, null, 2)], { type: 'application/json' }), 'krunker-crosshair-design.json');
+    status.textContent = 'design json download started.';
+  });
+  find('#import-design-button').addEventListener('click', () => find('#import-design').click());
+  find('#import-design').addEventListener('change', async event => {
+    const file = event.target.files[0]; if (!file) return;
+    try {
+      if (file.size > 50000) throw new Error('this file is too large. choose a design json exported by this editor.');
+      const data = JSON.parse(await file.text());
+      if (data.version !== 1 || !Object.keys(defaults).every(key => Object.hasOwn(data, key))) throw new Error('choose a version 1 design json exported by this editor.');
+      replaceState(data, 'design imported.'); find('#preset').value = '';
+    } catch (error) { status.textContent = `import failed: ${error.message.toLowerCase()}`; }
+    event.target.value = '';
+  });
+  updateControls(); render();
+}
+// Keep the runtime self-contained: its source is embedded in downloaded userscripts.
+function streakRuntime(settings) {
+  'use strict';
+  const { mode, sounds, images, volume, resetafter, fadedelay, iconsize, multi, counter } = settings;
+  let count = 0;
+  let resettimer;
+  let fadetimer;
+  let currentaudio;
+  let chat;
+  let watcher;
+  let seen = new WeakSet();
+  const overlay = document.createElement('div');
+  overlay.id = 'seal-streak-overlay';
+  overlay.setAttribute('aria-hidden', 'true');
+  Object.assign(overlay.style, {
+    position: 'fixed', bottom: '20px', left: '50%', transform: 'translateX(-50%)',
+    zIndex: '2147483647', pointerEvents: 'none', display: 'flex', alignItems: 'center', gap: '8px'
+  });
+  overlay.hidden = true;
+  overlay.style.display = 'none';
+  document.body.append(overlay);
+  function reset() {
+    count = 0;
+    clearTimeout(resettimer);
+    clearTimeout(fadetimer);
+    overlay.hidden = true;
+    overlay.style.display = 'none';
+    overlay.getAnimations().forEach(animation => animation.cancel());
+    overlay.replaceChildren();
+  }
+  function kill() {
+    count++;
+    clearTimeout(fadetimer);
+    overlay.getAnimations().forEach(animation => animation.cancel());
+    if (currentaudio) currentaudio.pause();
+    currentaudio = new Audio(sounds[Math.min(count - 1, sounds.length - 1)]);
+    currentaudio.volume = volume;
+    currentaudio.play().catch(() => {});
+    if (mode === 'killstreak') {
+      overlay.replaceChildren();
+      const slots = multi ? Math.min(count, images.length) : 1;
+      for (let i = 0; i < slots; i++) {
+        const icon = document.createElement('img');
+        icon.src = images[multi ? i : Math.min(count - 1, images.length - 1)];
+        icon.alt = '';
+        icon.width = iconsize;
+        icon.height = iconsize;
+        overlay.append(icon);
+      }
+      if (counter) {
+        const text = document.createElement('span');
+        text.textContent = `x${count}`;
+        overlay.append(text);
+      }
+      overlay.hidden = false;
+      overlay.style.display = 'flex';
+      overlay.animate([{ opacity: 0, scale: '0.8' }, { opacity: 1, scale: '1' }], { duration: 160 });
+      clearTimeout(fadetimer);
+      fadetimer = setTimeout(() => {
+        const animation = overlay.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 250 });
+        animation.onfinish = () => {
+          if (animation.playState === 'finished') { overlay.hidden = true; overlay.style.display = 'none'; }
+        };
+      }, fadedelay);
+    }
+    clearTimeout(resettimer);
+    resettimer = setTimeout(reset, resetafter);
+  }
+  function process(message) {
+    if (seen.has(message)) return;
+    const spans = [...message.querySelectorAll('span')].filter(span => span.textContent.trim());
+    if (spans.length < 2) return;
+    seen.add(message);
+    const self = span => span.textContent.trim().toLowerCase() === 'you' &&
+      ['rgb(255, 255, 255)', 'rgba(255, 255, 255, 1)'].includes(getComputedStyle(span).color);
+    const killer = spans[0];
+    const victim = spans[spans.length - 1];
+    if (self(victim)) { reset(); return; }
+    if (!self(killer)) return;
+    const headshot = !!message.querySelector('img.headShotChatIcon');
+    if (mode === 'headshot' && !headshot) { reset(); return; }
+    kill();
+  }
+  function connect() {
+    const next = document.querySelector('#chatList');
+    if (next === chat) return;
+    if (watcher) watcher.disconnect();
+    chat = next;
+    reset();
+    seen = new WeakSet();
+    if (!chat) return;
+    chat.querySelectorAll('.chatMsg').forEach(message => seen.add(message));
+    watcher = new MutationObserver(records => {
+      const messages = new Set();
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches('.chatMsg')) messages.add(node);
+          node.querySelectorAll('.chatMsg').forEach(message => messages.add(message));
+          const parent = node.closest('.chatMsg');
+          if (parent) messages.add(parent);
+        }
+      }
+      messages.forEach(process);
+    });
+    watcher.observe(chat, { childList: true, subtree: true });
+  }
+  connect();
+  setInterval(connect, 1000);
+}
+
+const blankImage = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+function buildUserscript(settings) {
+  const title = settings.mode === 'headshot' ? 'custom headshot streak sounds' : 'custom killstreak sounds';
+  return [
+    '// ==UserScript==', `// @name         ${title}`, '// @namespace    seal.krunker.creators',
+    '// @version      1.0.0', "// @description  made with seal's killstreak sound generator",
+    '// @author       seal', '// @match        *://krunker.io/*', '// @grant        none',
+    '// @run-at       document-idle', '// ==/UserScript==', '',
+    `(${streakRuntime.toString()})(${JSON.stringify(settings, null, 2)});`, ''
+  ].join('\n');
+}
+
+function mountKillstreak(panel) {
+  panel.innerHTML = `
+    <h2>killstreak script maker</h2>
+    <p>made by seal. build valorant-style streak sounds and evolving icons using your own files or direct links.</p>
+    <form id="ks-form">
+      <div class="workspace">
+        <div>
+          <fieldset><legend>streak type</legend>
+            <label for="ks-mode">detector</label>
+            <select id="ks-mode" required><option value="">choose one</option><option value="killstreak">killstreak sounds + icons</option><option value="headshot">headshot streak sounds</option></select>
+            <p>killstreak mode counts your kills. headshot mode counts consecutive headshots and resets on a non-headshot kill. both reset when you die or after inactivity.</p>
+          </fieldset>
+          <fieldset><legend>sounds</legend>
+            <p>add sounds in streak order. uploaded files come first, followed by links in line order. the last sound repeats for longer streaks.</p>
+            <button id="ks-sound-picker" type="button">choose sound files</button>
+            <input id="ks-sound-files" type="file" accept="audio/*" multiple hidden>
+            <p><label for="ks-sound-urls">direct audio links, one per line</label></p>
+            <textarea class="wide-input" id="ks-sound-urls" rows="5" placeholder="https://example.com/kill-1.mp3"></textarea>
+            <button id="ks-clear-sounds" type="button">clear sounds</button>
+            <ol class="asset-list" id="ks-sound-list"></ol>
+          </fieldset>
+          <fieldset id="ks-images"><legend>images</legend>
+            <p>up to six images in streak order. uploaded files come first. empty slots use a transparent image.</p>
+            <button id="ks-image-picker" type="button">choose image files</button>
+            <input id="ks-image-files" type="file" accept="image/*" multiple hidden>
+            <p><label for="ks-image-urls">direct image links, one per line</label></p>
+            <textarea class="wide-input" id="ks-image-urls" rows="5" placeholder="https://example.com/icon-1.png"></textarea>
+            <button id="ks-clear-images" type="button">clear images</button>
+            <ol class="asset-list" id="ks-image-list"></ol>
+          </fieldset>
+        </div>
+        <div>
+          <fieldset><legend>script settings</legend><div class="fields">
+            <label for="ks-volume">sound volume (%)</label><input id="ks-volume" type="number" min="0" max="100" step="1" value="60" required>
+            <label for="ks-reset">inactivity reset (seconds)</label><input id="ks-reset" type="number" min="1" max="300" step="1" value="15" required>
+            <label for="ks-fade">icon display time (ms)</label><input id="ks-fade" type="number" min="100" max="30000" step="100" value="1000" required>
+            <label for="ks-size">icon size (px)</label><input id="ks-size" type="number" min="16" max="256" step="1" value="128" required>
+            <label for="ks-multi">show icons in a row</label><input id="ks-multi" type="checkbox">
+            <label for="ks-counter">show kill counter</label><input id="ks-counter" type="checkbox">
+          </div></fieldset>
+          <h3>output</h3>
+          <div class="actions"><button id="ks-generate" type="submit">generate script</button><button id="ks-copy" type="button" disabled>copy output</button><button id="ks-download" type="button" disabled>download userscript</button></div>
+          <p id="ks-status" role="status" aria-live="polite">choose a streak type and add at least one sound.</p>
+          <label for="ks-output">generated userscript</label>
+          <textarea class="wide-input" id="ks-output" rows="24" readonly spellcheck="false"></textarea>
+          <details><summary>how to use</summary><ol>
+            <li>choose your detector, add sounds and optional images, then generate the script.</li>
+            <li>download the .user.js file and import it into your browser's userscript manager.</li>
+            <li>open krunker and interact with the game so the browser can play sounds.</li>
+          </ol><p>uploaded files are embedded in the script. links remain links and must stay available. quotes around pasted links are removed. the detector uses the chat markup from your supplied script; changes to krunker can affect it.</p>
+          <p>headshot mode plays sounds only. no valorant assets are bundled.</p></details>
+        </div>
+      </div>
+    </form>`;
+  const get = id => panel.querySelector(`#ks-${id}`);
+  const form = get('form');
+  const status = get('status');
+  const output = get('output');
+  let sounds = [];
+  let images = [];
+  let objecturls = [];
+  let revision = 0;
+  let generating = false;
+
+  const urls = kind => get(`${kind}-urls`).value.split(/\r?\n/)
+    .map(line => line.trim().replace(/["'`“”‘’]/g, '').replace(/[;,]+$/g, '').trim()).filter(Boolean);
+  function invalidate() {
+    revision++;
+    output.value = '';
+    get('copy').disabled = get('download').disabled = true;
+    status.textContent = 'settings changed. generate a new script when ready.';
+  }
+  function toggle() {
+    const headshot = get('mode').value === 'headshot';
+    get('images').hidden = headshot;
+    for (const name of ['fade', 'size', 'multi', 'counter']) get(name).disabled = headshot;
+  }
+  function list() {
+    objecturls.forEach(url => URL.revokeObjectURL(url)); objecturls = [];
+    for (const kind of ['sound', 'image']) {
+      const target = get(`${kind}-list`); target.replaceChildren();
+      const files = kind === 'sound' ? sounds : images;
+      files.forEach(file => {
+        const li = document.createElement('li'); li.append(`uploaded file: ${file.name.toLowerCase()}`);
+        const source = URL.createObjectURL(file); objecturls.push(source);
+        if (kind === 'sound') {
+          const audio = document.createElement('audio'); audio.controls = true; audio.preload = 'none'; audio.src = source; li.append(audio);
+        } else {
+          const image = document.createElement('img'); image.alt = 'uploaded streak icon'; image.src = source; li.append(image);
+        }
+        target.append(li);
+      });
+      urls(kind).forEach((url, i) => {
+        const li = document.createElement('li'); li.textContent = `${kind} link ${i + 1}`; target.append(li);
+      });
+      if (kind === 'image') {
+        const count = images.length + urls('image').length;
+        if (count > 6) { const li = document.createElement('li'); li.textContent = 'only the first six images will be used.'; target.append(li); }
+        for (let i = count; i < 6; i++) { const li = document.createElement('li'); li.textContent = 'transparent image'; target.append(li); }
+      }
+    }
+  }
+  function checkurl(url, kind) {
+    if (url.startsWith(`data:${kind}/`)) return url;
+    try {
+      const parsed = new URL(url);
+      if (!['https:', 'http:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new Error();
+      return url;
+    } catch { throw new Error(`use a direct http or https ${kind} link.`); }
+  }
+  function read(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(new Error('could not read an uploaded file. please select it again.'));
+      reader.readAsDataURL(file);
+    });
+  }
+  for (const kind of ['sound', 'image']) {
+    get(`${kind}-picker`).addEventListener('click', () => get(`${kind}-files`).click());
+    get(`${kind}-files`).addEventListener('change', () => {
+      const files = [...get(`${kind}-files`).files];
+      const type = kind === 'sound' ? 'audio/' : 'image/';
+      if (files.some(file => !file.type.startsWith(type))) { status.textContent = `choose valid ${kind} files.`; get(`${kind}-files`).value = ''; return; }
+      if (kind === 'sound') sounds = files; else images = files.slice(0, 6);
+      invalidate(); list();
+      if (kind === 'image' && files.length > 6) status.textContent = 'only the first six uploaded images will be used.';
+    });
+    get(`${kind}-urls`).addEventListener('input', () => { invalidate(); list(); });
+    get(`clear-${kind}s`).addEventListener('click', () => {
+      if (kind === 'sound') sounds = []; else images = [];
+      get(`${kind}-files`).value = ''; get(`${kind}-urls`).value = ''; invalidate(); list();
+    });
+  }
+  for (const name of ['mode', 'volume', 'reset', 'fade', 'size', 'multi', 'counter']) {
+    get(name).addEventListener('input', () => { invalidate(); toggle(); });
+  }
+  form.addEventListener('submit', async event => {
+    event.preventDefault();
+    if (generating || !form.reportValidity()) return;
+    const current = revision;
+    generating = true; get('generate').disabled = true;
+    status.textContent = 'generating script…';
+    try {
+      const mode = get('mode').value;
+      if (!mode) throw new Error('choose a streak type first.');
+      const soundlinks = urls('sound').map(url => checkurl(url, 'audio'));
+      if (!sounds.length && !soundlinks.length) throw new Error('add at least one sound before generating.');
+      const imagelinks = mode === 'killstreak' ? urls('image').map(url => checkurl(url, 'image')) : [];
+      const settings = {
+        mode, sounds: [...await Promise.all(sounds.map(read)), ...soundlinks],
+        images: mode === 'killstreak' ? [...await Promise.all(images.map(read)), ...imagelinks].slice(0, 6) : [],
+        volume: Number(get('volume').value)/100, resetafter: Number(get('reset').value)*1000,
+        fadedelay: Number(get('fade').value), iconsize: Number(get('size').value),
+        multi: get('multi').checked, counter: get('counter').checked
+      };
+      if (mode === 'killstreak') while (settings.images.length < 6) settings.images.push(blankImage);
+      if (revision !== current) { status.textContent = 'settings changed while generating. generate again.'; return; }
+      output.value = buildUserscript(settings);
+      get('copy').disabled = get('download').disabled = false;
+      status.textContent = `generated ${mode} script with ${settings.sounds.length} sound(s)${mode === 'killstreak' ? ' and six image slots' : ''}.`;
+    } catch (error) { status.textContent = error.message.toLowerCase(); }
+    finally { generating = false; get('generate').disabled = false; }
+  });
+  get('copy').addEventListener('click', async () => {
+    if (!output.value) return;
+    try { await navigator.clipboard.writeText(output.value); status.textContent = 'output copied.'; }
+    catch { output.focus(); output.select(); status.textContent = 'press ctrl+c or command+c to copy the selected output.'; }
+  });
+  get('download').addEventListener('click', () => {
+    if (!output.value) return;
+    const url = URL.createObjectURL(new Blob([output.value], { type: 'text/javascript' }));
+    const link = document.createElement('a'); link.href = url;
+    link.download = `custom-${get('mode').value}-sounds.user.js`;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    status.textContent = 'userscript download started.';
+  });
+  toggle(); list();
+}
+
+// Add future tools here. Each mount function receives its own panel element.
+const tabs = [
+  { id: 'crosshair', label: 'crosshair', mount: mountCrosshair },
+  { id: 'killstreak', label: 'killstreak', mount: mountKillstreak }
+];
+const tablist = document.querySelector('#tabs');
+const panels = document.querySelector('#panels');
+
+function activate(id, focus = false) {
+  for (const tab of tabs) {
+    const button = document.getElementById(`tab-${tab.id}`);
+    const active = tab.id === id;
+    button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
+    document.getElementById(`panel-${tab.id}`).hidden = !active;
+    if (active && focus) button.focus();
+  }
+}
+
+tabs.forEach((tab, index) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.id = `tab-${tab.id}`;
+  button.setAttribute('role', 'tab');
+  button.setAttribute('aria-controls', `panel-${tab.id}`);
+  button.textContent = tab.label;
+  button.addEventListener('click', () => activate(tab.id));
+  button.addEventListener('keydown', event => {
+    let next;
+    if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+    if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+    if (event.key === 'Home') next = 0;
+    if (event.key === 'End') next = tabs.length - 1;
+    if (next !== undefined) { event.preventDefault(); activate(tabs[next].id, true); }
+  });
+  const panel = document.createElement('section');
+  panel.id = `panel-${tab.id}`;
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', button.id);
+  tablist.append(button);
+  panels.append(panel);
+  tab.mount(panel);
+});
+activate(tabs[0].id);
+</script>
+</head>
+<body>
+  <header>
+    <h1>krunker</h1>
+    <p>create your own crosshairs and killstreak sounds for krunker.</p>
+  </header>
+  <nav id="tabs" role="tablist" aria-label="tools"></nav>
+  <main id="panels"></main>
+</body>
+</html>
